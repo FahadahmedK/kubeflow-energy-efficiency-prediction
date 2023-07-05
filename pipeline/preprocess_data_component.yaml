@@ -1,0 +1,88 @@
+name: Preprocess data
+inputs:
+- {name: input_train_csv, type: Dataset}
+- {name: input_test_csv, type: Dataset}
+outputs:
+- {name: output_train_x, type: Dataset}
+- {name: output_test_x, type: Dataset}
+- {name: output_train_y, type: Artifact}
+- {name: output_test_y, type: Artifact}
+implementation:
+  container:
+    image: python:3.7
+    command:
+    - sh
+    - -c
+    - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet                 --no-warn-script-location
+      'pandas' 'numpy' 'appengine-python-standard' 'kfp==1.7.0' || PIP_DISABLE_PIP_VERSION_CHECK=1
+      python3 -m pip install --quiet                 --no-warn-script-location 'pandas'
+      'numpy' 'appengine-python-standard' 'kfp==1.7.0' --user) && "$0" "$@"
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp -d)
+      printf "%s" "$0" > "$program_path/ephemeral_component.py"
+      python3 -m kfp.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+    - |2+
+
+      from kfp.v2.dsl import *
+      from typing import *
+
+      def preprocess_data(
+          input_train_csv: Input[Dataset], input_test_csv: Input[Dataset],
+          output_train_x: Output[Dataset], output_test_x: Output[Dataset],
+          output_train_y: Output[Artifact], output_test_y: Output[Artifact]
+      ):
+          import pandas as pd
+          import numpy as np
+          import pickle
+
+          def format_output(data):
+              y1 = data.pop('Y1')
+              y1 = np.array(y1)
+              y2 = data.pop('Y2')
+              y2 = np.array(y2)
+              return y1, y2
+
+          def norm(x, train_stats):
+              return (x - train_stats['mean']) / train_stats['std']
+
+          train = pd.read_csv(input_train_csv.path)
+          test = pd.read_csv(input_test_csv.path)
+
+          train_stats = train.describe()
+          train_stats.pop('Y1')
+          train_stats.pop('Y2')
+          train_stats = train_stats.transpose()
+
+          train_Y = format_output(train)
+          with open(output_train_y.path, "wb") as file:
+              pickle.dump(train_Y, file)
+
+          test_Y = format_output(test)
+          with open(output_test_y.path, "wb") as file:
+              pickle.dump(test_Y, file)
+
+          norm_train_x = norm(train, train_stats)
+          norm_test_x = norm(test, train_stats)
+
+          norm_train_x.to_csv(output_train_x.path, index=False)
+          norm_test_x.to_csv(output_test_x.path, index=False)
+
+    args:
+    - --executor_input
+    - {executorInput: null}
+    - --function_to_execute
+    - preprocess_data
+    - --input-train-csv-output-path
+    - {inputPath: input_train_csv}
+    - --input-test-csv-output-path
+    - {inputPath: input_test_csv}
+    - --output-train-x-output-path
+    - {outputPath: output_train_x}
+    - --output-test-x-output-path
+    - {outputPath: output_test_x}
+    - --output-train-y-output-path
+    - {outputPath: output_train_y}
+    - --output-test-y-output-path
+    - {outputPath: output_test_y}

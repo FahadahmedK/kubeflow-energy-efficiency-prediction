@@ -1,0 +1,42 @@
+name: Download data
+inputs:
+- {name: url, type: String}
+outputs:
+- {name: output_csv, type: Dataset}
+implementation:
+  container:
+    image: python:3.7
+    command:
+    - sh
+    - -c
+    - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet                 --no-warn-script-location
+      'pandas' 'openpyxl' 'appengine-python-standard' 'kfp==1.7.0' || PIP_DISABLE_PIP_VERSION_CHECK=1
+      python3 -m pip install --quiet                 --no-warn-script-location 'pandas'
+      'openpyxl' 'appengine-python-standard' 'kfp==1.7.0' --user) && "$0" "$@"
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp -d)
+      printf "%s" "$0" > "$program_path/ephemeral_component.py"
+      python3 -m kfp.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+    - |2+
+
+      from kfp.v2.dsl import *
+      from typing import *
+
+      def download_data(url:str, output_csv:Output[Dataset]) -> None:
+          import pandas as pd
+
+          df = pd.read_excel(url)
+          df = df.sample(frac=1).reset_index(drop=True)
+          df.to_csv(output_csv.path, index=False)
+
+    args:
+    - --executor_input
+    - {executorInput: null}
+    - --function_to_execute
+    - download_data
+    - --url-output-path
+    - {inputValue: url}
+    - --output-csv-output-path
+    - {outputPath: output_csv}

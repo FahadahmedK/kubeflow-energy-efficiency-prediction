@@ -1,0 +1,88 @@
+name: Train model
+inputs:
+- {name: input_train_x, type: Dataset}
+- {name: input_train_y, type: Dataset}
+outputs:
+- {name: output_model, type: Model}
+- {name: output_history, type: Artifact}
+implementation:
+  container:
+    image: python:3.7
+    command:
+    - sh
+    - -c
+    - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet                 --no-warn-script-location
+      'tensorflow' 'pandas' 'appengine-python-standard' 'kfp==1.7.0' || PIP_DISABLE_PIP_VERSION_CHECK=1
+      python3 -m pip install --quiet                 --no-warn-script-location 'tensorflow'
+      'pandas' 'appengine-python-standard' 'kfp==1.7.0' --user) && "$0" "$@"
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp -d)
+      printf "%s" "$0" > "$program_path/ephemeral_component.py"
+      python3 -m kfp.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+    - |2+
+
+      from kfp.v2.dsl import *
+      from typing import *
+
+      def train_model(
+          input_train_x: Input[Dataset], input_train_y: Input[Dataset],
+          output_model: Output[Model], output_history: Output[Artifact]
+      ):
+          import pandas as pd
+          import tensorflow as tf
+          import pickle
+
+          from tensorflow.keras import Model
+          from tensorflow.keras.layers import Dense, Input
+
+          norm_train_X = pd.read_csv(input_train_x.path)
+          with open(input_train_y.path, "rb") as file:
+              train_Y = pickle.load(file)
+
+          def model(train_X):
+              input_layer = Input(shape=len(train_X.columns))
+              dense1 = Dense(units=128, activation='relu')(input_layer)
+              dense2 = Dense(units=128, activation='relu')(dense1)
+              dense3 = Dense(units=64, activation='relu')(dense2)
+
+              y1_output = Dense(units=1, name='y1_output')(dense2)
+              y2_output = Dense(units=1, name='y2_output')(dense3)
+
+              model = Model(inputs=input_layer, outputs=[y1_output, y2_output])
+
+              print(model.summary())
+
+              return model
+
+          model = model(norm_train_X)
+
+          optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+          model.compile(
+              optimizer=optimizer,
+              loss={'y1_output': 'mse', 'y2_output': 'mse'},
+              metrics={
+                  'y1_output': tf.keras.metrics.RootMeanSquaredError(),
+                  'y2_output': tf.keras.metrics.RootMeanSquaredError()
+              }
+          )
+          history = model.fit(norm_train_X, train_Y, epochs=100)
+          model.save(output_model.path)
+
+          with open(output_history.path, "wb") as file:
+              train_Y = pickle.dump(history.history, file)
+
+    args:
+    - --executor_input
+    - {executorInput: null}
+    - --function_to_execute
+    - train_model
+    - --input-train-x-output-path
+    - {inputPath: input_train_x}
+    - --input-train-y-output-path
+    - {inputPath: input_train_y}
+    - --output-model-output-path
+    - {outputPath: output_model}
+    - --output-history-output-path
+    - {outputPath: output_history}

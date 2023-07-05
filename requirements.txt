@@ -1,0 +1,6 @@
+kfp
+jupyter
+ipython
+pandas
+numpy
+tensorflow
